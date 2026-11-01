@@ -255,3 +255,12 @@ bool cidr_parse(const char *text, cidr_t *block) {
     block->prefix = prefix;
     return true;
 }
+
+void cidr_format(cidr_t block, char out[CIDR_STR_LEN]) {
+    snprintf(out, CIDR_STR_LEN, "%u.%u.%u.%u/%u",
+        (addr & 0xFF000000) >> 24,
+        (addr & 0x00FF0000) >> 16,
+        (addr & 0x0000FF00) >> 8,
+        (addr & 0x000000FF),
+        block->prefix);
+}
