@@ -111,3 +111,87 @@ void cidr_format(cidr_t block, char out[CIDR_STR_LEN]) {
     unsigned int prefix = block.prefix > 32 ? 32U : block.prefix;
     snprintf(out, CIDR_STR_LEN, "%s/%u", address, prefix);
 }
+
+uint32_t cidr_mask(uint8_t prefix)
+{
+    if (prefix == 0) {
+        return 0;
+    }
+    if (prefix >= 32) {
+        return UINT32_MAX;
+    }
+    // Handle /0 above so the shift count is always between 0 and 31.
+    return UINT32_MAX << (32 - prefix);
+}
+
+uint32_t cidr_network(cidr_t block)
+{
+    return block.addr & cidr_mask(block.prefix);
+}
+
+uint32_t cidr_broadcast(cidr_t block)
+{
+    return block.addr | ~cidr_mask(block.prefix);
+}
+
+uint32_t cidr_first_host(cidr_t block)
+{
+    uint32_t network = cidr_network(block);
+    // /31 and /32 have no separate network address to skip.
+    return block.prefix >= 31 ? network : network + 1;
+}
+
+uint32_t cidr_last_host(cidr_t block)
+{
+    uint32_t broadcast = cidr_broadcast(block);
+    // /31 and /32 have no separate broadcast address to skip.
+    return block.prefix >= 31 ? broadcast : broadcast - 1;
+}
+
+uint64_t cidr_host_count(cidr_t block)
+{
+    if (block.prefix >= 32) {
+        return 1;
+    }
+    if (block.prefix == 31) {
+        return 2;
+    }
+    // Use 64 bits so the /0 address count (2^32) is representable before subtracting.
+    return (UINT64_C(1) << (32 - block.prefix)) - 2;
+}
+
+bool cidr_contains(cidr_t block, uint32_t addr)
+{
+    uint32_t mask = cidr_mask(block.prefix);
+    return (addr & mask) == (block.addr & mask);
+}
+
+bool cidr_is_network(cidr_t block)
+{
+    return block.addr == cidr_network(block);
+}
+
+bool cidr_subnet(cidr_t block, uint32_t n, uint32_t i, cidr_t *out)
+{
+    if (out == NULL || block.prefix > 32 || !cidr_is_network(block) ||
+        n == 0 || (n & (n - 1)) != 0 || i >= n) {
+        return false;
+    }
+
+    // A power-of-two subnet count borrows log2(n) bits from the host portion.
+    uint8_t subnet_bits = 0;
+    for (uint32_t count = n; count > 1; count >>= 1) {
+        subnet_bits++;
+    }
+    uint16_t new_prefix = (uint16_t)block.prefix + subnet_bits;
+    if (new_prefix > 32) {
+        return false;
+    }
+
+    // Keep /0's possible 2^32-address size representable during offset arithmetic.
+    uint64_t subnet_size = UINT64_C(1) << (32 - new_prefix);
+    uint64_t subnet_addr = (uint64_t)block.addr + subnet_size * i;
+    cidr_t subnet = { (uint32_t)subnet_addr, (uint8_t)new_prefix };
+    *out = subnet;
+    return true;
+}
