@@ -8,6 +8,7 @@ static bool parse_decimal(const char **text, uint32_t max, uint32_t *value)
         return false;
     }
 
+    // Reject ambiguous octal-looking values such as "010".
     if (*cursor == '0' && cursor[1] >= '0' && cursor[1] <= '9') {
         return false;
     }
@@ -15,6 +16,7 @@ static bool parse_decimal(const char **text, uint32_t max, uint32_t *value)
     uint32_t parsed = 0;
     do {
         uint32_t digit = (uint32_t)(*cursor - '0');
+        // Check the next digit before multiplying, so oversized input cannot overflow.
         if (parsed > max / 10 ||
             (parsed == max / 10 && digit > max % 10)) {
             return false;
@@ -33,6 +35,7 @@ static bool parse_ipv4(const char **text, uint32_t *addr)
     const char *cursor = *text;
     uint32_t parsed = 0;
 
+    // Parse exactly four bounded octets and pack them in network-style order.
     for (unsigned int octet_index = 0; octet_index < 4; octet_index++) {
         uint32_t octet;
         if (!parse_decimal(&cursor, UINT8_MAX, &octet)) {
@@ -58,6 +61,7 @@ bool ip_parse(const char *text, uint32_t *addr)
         return false;
     }
 
+    // Require the whole string to be consumed; only publish a result on success.
     const char *cursor = text;
     uint32_t parsed;
     if (!parse_ipv4(&cursor, &parsed) || *cursor != '\0') {
@@ -70,6 +74,7 @@ bool ip_parse(const char *text, uint32_t *addr)
 
 void ip_format(uint32_t addr, char out[IP_STR_LEN])
 {
+    // Extract the address's four octets from most to least significant.
     snprintf(out, IP_STR_LEN, "%u.%u.%u.%u",
         (unsigned int)((addr >> 24) & UINT32_C(0xff)),
         (unsigned int)((addr >> 16) & UINT32_C(0xff)),
@@ -85,6 +90,7 @@ bool cidr_parse(const char *text, cidr_t *block) {
     const char *cursor = text;
     cidr_t parsed;
     uint32_t prefix;
+    // Parse an IPv4 address, then require a slash and a complete 0-32 prefix.
     if (!parse_ipv4(&cursor, &parsed.addr) || *cursor != '/') {
         return false;
     }
@@ -101,6 +107,7 @@ bool cidr_parse(const char *text, cidr_t *block) {
 void cidr_format(cidr_t block, char out[CIDR_STR_LEN]) {
     char address[IP_STR_LEN];
     ip_format(block.addr, address);
+    // Keep formatting consistent with cidr_mask(), which treats larger prefixes as /32.
     unsigned int prefix = block.prefix > 32 ? 32U : block.prefix;
     snprintf(out, CIDR_STR_LEN, "%s/%u", address, prefix);
 }
