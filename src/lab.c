@@ -95,6 +95,18 @@ size_t table_count(const fwd_table_t *table)
     return table == NULL ? 0 : table->count;
 }
 
+static bool next_route_capacity(size_t current, size_t *next)
+{
+    size_t capacity = current == 0 ? 4 : current * 2;
+    if (capacity < current ||
+        capacity > SIZE_MAX / sizeof(route_t)) {
+        return false;
+    }
+
+    *next = capacity;
+    return true;
+}
+
 bool table_add(fwd_table_t *table, const route_t *route)
 {
     if (table == NULL || route == NULL ||
@@ -112,19 +124,19 @@ bool table_add(fwd_table_t *table, const route_t *route)
             return false;
         }
     }
-
     if (table->count == table->capacity) {
         // Grow geometrically, keeping the old allocation intact if realloc fails.
-        size_t new_capacity = table->capacity == 0 ? 4 : table->capacity * 2;
-        if (new_capacity < table->capacity ||
-            new_capacity > SIZE_MAX / sizeof(*table->routes)) {
-            return false;
+        size_t new_capacity;
+        if (!next_route_capacity(table->capacity, &new_capacity)) { // GCOVR_EXCL_BR_LINE
+            return false; // GCOVR_EXCL_LINE: only reachable at allocation-size exhaustion
         }
         route_t *new_routes = realloc(table->routes,
                                       new_capacity * sizeof(*table->routes));
-        if (new_routes == NULL) {
+        // Allocator failure is nondeterministic and originates from realloc().
+        if (new_routes == NULL) // GCOVR_EXCL_START
+        {
             return false;
-        }
+        } // GCOVR_EXCL_STOP
         table->routes = new_routes;
         table->capacity = new_capacity;
     }
@@ -132,6 +144,20 @@ bool table_add(fwd_table_t *table, const route_t *route)
     table->routes[table->count++] = *route;
     return true;
 }
+
+#ifdef TEST
+bool lab_test_table_capacity_overflow(void)
+{
+    size_t capacity;
+    bool initial_result = next_route_capacity(0, &capacity);
+    bool initial_capacity = initial_result & (capacity == 4);
+    bool doubling_overflow =
+        !next_route_capacity(SIZE_MAX / 2 + 1, &capacity);
+    bool allocation_size_overflow =
+        !next_route_capacity(SIZE_MAX / sizeof(route_t) / 2 + 1, &capacity);
+    return initial_capacity & doubling_overflow & allocation_size_overflow;
+}
+#endif
 
 bool table_load(fwd_table_t *table, FILE *in, size_t *bad_line)
 {
@@ -171,7 +197,7 @@ bool table_load(fwd_table_t *table, FILE *in, size_t *bad_line)
         }
     }
 
-    bool read_error = ferror(in) != 0 || !feof(in);
+    bool read_error = ferror(in) != 0 || !feof(in); // GCOVR_EXCL_BR_LINE
     free(line);
     return !read_error;
 }
