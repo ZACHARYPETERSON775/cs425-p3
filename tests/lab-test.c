@@ -1,7 +1,10 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "harness/unity.h"
 #include "../src/lab.h"
+
+bool lab_test_table_capacity_overflow(void);
 
 void setUp(void) {
   printf("Setting up tests...\n");
@@ -14,13 +17,21 @@ void tearDown(void) {
 void test_ip_parse_reject(void)
 {
   uint32_t addr = UINT32_C(0x12345678);
+  TEST_ASSERT_FALSE(ip_parse("", &addr));
   TEST_ASSERT_FALSE(ip_parse("1.2.3", &addr));
   TEST_ASSERT_FALSE(ip_parse("1.2.3.4.5", &addr));
   TEST_ASSERT_FALSE(ip_parse("1..2.3", &addr));
+  TEST_ASSERT_FALSE(ip_parse(".1.2.3.4", &addr));
+  TEST_ASSERT_FALSE(ip_parse("1.2.3.", &addr));
+  TEST_ASSERT_FALSE(ip_parse("1.2.3.256", &addr));
+  TEST_ASSERT_FALSE(ip_parse("1.2.999999999999999999999.4", &addr));
   TEST_ASSERT_FALSE(ip_parse("256.1.1.1", &addr));
   TEST_ASSERT_FALSE(ip_parse("010.0.0.1", &addr));
   TEST_ASSERT_FALSE(ip_parse("1.2.3.4x", &addr));
   TEST_ASSERT_FALSE(ip_parse("+1.2.3.4", &addr));
+  TEST_ASSERT_FALSE(ip_parse("-1.2.3.4", &addr));
+  TEST_ASSERT_FALSE(ip_parse(" 1.2.3.4", &addr));
+  TEST_ASSERT_FALSE(ip_parse("0:1.2.3", &addr));
   TEST_ASSERT_FALSE(ip_parse("1.2.3.4junk", &addr));
   TEST_ASSERT_FALSE(ip_parse("1.2.3.4/33", &addr));
   TEST_ASSERT_FALSE(ip_parse("1.2.3.4/024", &addr));
@@ -52,6 +63,7 @@ void test_cidr_parse_reject(void)
   cidr_t block = { UINT32_C(0x12345678), 12 };
 
   TEST_ASSERT_FALSE(cidr_parse("1.2.3", &block));
+  TEST_ASSERT_FALSE(cidr_parse("", &block));
   TEST_ASSERT_FALSE(cidr_parse("1.2.3.4.5/24", &block));
   TEST_ASSERT_FALSE(cidr_parse("1..2.3.4/24", &block));
   TEST_ASSERT_FALSE(cidr_parse("256.1.1.1/24", &block));
@@ -60,6 +72,11 @@ void test_cidr_parse_reject(void)
   TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/33", &block));
   TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/024", &block));
   TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/", &block));
+  TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/33", &block));
+  TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/99999999999999999999", &block));
+  TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/+24", &block));
+  TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/24x", &block));
+  TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/24/1", &block));
   TEST_ASSERT_FALSE(cidr_parse("1.2.3/24", &block));
   TEST_ASSERT_FALSE(cidr_parse(NULL, &block));
   TEST_ASSERT_FALSE(cidr_parse("1.2.3.4/24", NULL));
@@ -151,6 +168,10 @@ void test_cidr_subnet(void)
 
   block.addr++;
   TEST_ASSERT_FALSE(cidr_subnet(block, 1, 0, &subnet));
+  block.addr = 0;
+  block.prefix = 33;
+  TEST_ASSERT_FALSE(cidr_subnet(block, 1, 0, &subnet));
+  TEST_ASSERT_FALSE(cidr_subnet(block, 0, 0, &subnet));
 
   block.addr = 0;
   block.prefix = 0;
@@ -175,13 +196,24 @@ void test_route_parse(void)
   TEST_ASSERT_EQUAL_UINT8(16, route.dest.prefix);
   TEST_ASSERT_EQUAL_HEX32(0, route.gateway);
   TEST_ASSERT_EQUAL_STRING("eth1", route.dev);
+  TEST_ASSERT_TRUE(route_parse("\t default\t0.0.0.0\tdev0  \t", &route));
+  TEST_ASSERT_EQUAL_HEX32(0, route.gateway);
 
   route_t original = route;
+  TEST_ASSERT_FALSE(route_parse("", &route));
+  TEST_ASSERT_FALSE(route_parse("only-one-field", &route));
+  TEST_ASSERT_FALSE(route_parse("one two", &route));
+  TEST_ASSERT_TRUE(route_parse("default direct dev0 ", &route));
+  TEST_ASSERT_FALSE(route_parse("not-a-cidr direct eth0", &route));
   TEST_ASSERT_FALSE(route_parse("10.1.0.1/16 direct eth1", &route));
+  TEST_ASSERT_FALSE(route_parse("default invalid-gateway eth0", &route));
   TEST_ASSERT_FALSE(route_parse("10.1.0.0/16 010.0.0.1 eth1", &route));
   TEST_ASSERT_FALSE(route_parse("10.1.0.0/16 direct", &route));
   TEST_ASSERT_FALSE(route_parse("10.1.0.0/16 direct eth1 extra", &route));
   TEST_ASSERT_FALSE(route_parse("10.1.0.0/16 direct interface-name-too-long", &route));
+  TEST_ASSERT_FALSE(route_parse("destination-that-is-way-too-long direct eth0", &route));
+  TEST_ASSERT_FALSE(route_parse("default gateway-address-is-too-long eth0", &route));
+  TEST_ASSERT_FALSE(route_parse("default direct ", &route));
   TEST_ASSERT_FALSE(route_parse(NULL, &route));
   TEST_ASSERT_FALSE(route_parse("default direct eth0", NULL));
   TEST_ASSERT_EQUAL_HEX32(original.dest.addr, route.dest.addr);
@@ -197,20 +229,25 @@ void test_forwarding_table(void)
   TEST_ASSERT_EQUAL_size_t(0, table_count(table));
   TEST_ASSERT_EQUAL_size_t(0, table_count(NULL));
   TEST_ASSERT_NULL(table_lookup(NULL, UINT32_C(0x0a0102c8)));
+  TEST_ASSERT_FALSE(table_load(NULL, NULL, NULL));
+  size_t bad_line = 42;
+  TEST_ASSERT_FALSE(table_load(table, NULL, &bad_line));
+  TEST_ASSERT_EQUAL_size_t(0, bad_line);
 
   FILE *input = tmpfile();
   TEST_ASSERT_TRUE(input != NULL);
   fputs("# example routes\n"
-        "10.1.2.128/25 10.1.2.1 eth2 # router behind eth2\n"
+        "  \t# whitespace-only route line\n"
         "default 132.178.227.1 eno1\n"
-        "132.178.227.0/25 direct eno1\n"
         "10.0.0.0/8 10.1.0.1 eth1\n"
-        "10.1.2.0/24 direct eth2\n"
         "10.1.0.0/16 direct eth1\n"
+        "10.1.2.0/24 direct eth2\n"
+        "10.1.2.128/25 10.1.2.1 eth2 # router behind eth2\n"
+        "132.178.227.0/25 direct eno1\n"
         "192.168.0.0/16 10.1.0.1 eth1\n", input);
   rewind(input);
 
-  size_t bad_line = 99;
+  bad_line = 99;
   TEST_ASSERT_TRUE(table_load(table, input, &bad_line));
   TEST_ASSERT_EQUAL_size_t(0, bad_line);
   TEST_ASSERT_EQUAL_size_t(7, table_count(table));
@@ -242,6 +279,15 @@ void test_forwarding_table(void)
   TEST_ASSERT_EQUAL_STRING("eno1", match->dev);
 
   route_t duplicate = { { UINT32_C(0x0a010000), 16 }, 0, "eth9" };
+  route_t invalid = { { UINT32_C(0x0a010001), 16 }, 0, "eth9" };
+  TEST_ASSERT_FALSE(table_add(table, &invalid));
+  invalid = (route_t){ { UINT32_C(0x0a010000), 33 }, 0, "eth9" };
+  TEST_ASSERT_FALSE(table_add(table, &invalid));
+  invalid = (route_t){ { 0, 0 }, 0, "" };
+  TEST_ASSERT_FALSE(table_add(table, &invalid));
+  memset(invalid.dev, 'x', sizeof(invalid.dev));
+  invalid.dest = (cidr_t){ 0, 0 };
+  TEST_ASSERT_FALSE(table_add(table, &invalid));
   TEST_ASSERT_FALSE(table_add(table, &duplicate));
   TEST_ASSERT_FALSE(table_add(NULL, &duplicate));
   TEST_ASSERT_FALSE(table_add(table, NULL));
@@ -249,16 +295,79 @@ void test_forwarding_table(void)
 
   input = tmpfile();
   TEST_ASSERT_TRUE(input != NULL);
-  fputs("192.0.2.0/24 direct eth0\n"
-        "192.0.2.0/24 192.0.2.1 eth1\n", input);
+  fputs("# first valid line\n"
+        "192.0.2.0/24 direct eth0\n"
+        "\n"
+        "not-a-cidr direct eth1\n"
+        "192.0.3.0/24 direct eth0\n", input);
   rewind(input);
   TEST_ASSERT_FALSE(table_load(table, input, &bad_line));
-  TEST_ASSERT_EQUAL_size_t(2, bad_line);
+  TEST_ASSERT_EQUAL_size_t(4, bad_line);
   TEST_ASSERT_EQUAL_size_t(8, table_count(table));
+  fclose(input);
+
+  input = tmpfile();
+  TEST_ASSERT_TRUE(input != NULL);
+  fputs("192.0.2.0/24 direct eth0\n", input);
+  rewind(input);
+  TEST_ASSERT_FALSE(table_load(table, input, NULL));
+  fclose(input);
+
+  input = tmpfile();
+  TEST_ASSERT_TRUE(input != NULL);
+  fputs("198.51.100.0/24 direct eth0\n", input);
+  rewind(input);
+  TEST_ASSERT_TRUE(table_load(table, input, NULL));
+  TEST_ASSERT_EQUAL_size_t(9, table_count(table));
   fclose(input);
 
   table_destroy(table);
   table_destroy(NULL);
+}
+
+void test_forwarding_table_without_default(void)
+{
+  fwd_table_t *table = table_create();
+  TEST_ASSERT_TRUE(table != NULL);
+
+  route_t broad = { { UINT32_C(0x0a000000), 8 }, 0, "broad" };
+  route_t middle = { { UINT32_C(0x0a010000), 16 }, 0, "middle" };
+  route_t narrow = { { UINT32_C(0x0a010200), 24 }, 0, "narrow" };
+  route_t longest = { { UINT32_C(0x0a010280), 25 }, 0, "longest" };
+  route_t same_network_different_prefix = {
+    { UINT32_C(0x0a000000), 9 }, 0, "same-network"
+  };
+
+  TEST_ASSERT_TRUE(table_add(table, &broad));
+  TEST_ASSERT_TRUE(table_add(table, &same_network_different_prefix));
+  TEST_ASSERT_TRUE(table_add(table, &middle));
+  TEST_ASSERT_TRUE(table_add(table, &narrow));
+  TEST_ASSERT_TRUE(table_add(table, &longest));
+  const route_t *match = table_lookup(table, UINT32_C(0x0a0102c8));
+  TEST_ASSERT_TRUE(match != NULL);
+  TEST_ASSERT_EQUAL_UINT8(25, match->dest.prefix);
+  TEST_ASSERT_EQUAL_STRING("longest", match->dev);
+  TEST_ASSERT_NULL(table_lookup(table, UINT32_C(0xc0a80101)));
+
+  fwd_table_t *reverse = table_create();
+  TEST_ASSERT_TRUE(reverse != NULL);
+  TEST_ASSERT_TRUE(table_add(reverse, &longest));
+  TEST_ASSERT_TRUE(table_add(reverse, &narrow));
+  TEST_ASSERT_TRUE(table_add(reverse, &middle));
+  TEST_ASSERT_TRUE(table_add(reverse, &same_network_different_prefix));
+  TEST_ASSERT_TRUE(table_add(reverse, &broad));
+  match = table_lookup(reverse, UINT32_C(0x0a0102c8));
+  TEST_ASSERT_TRUE(match != NULL);
+  TEST_ASSERT_EQUAL_UINT8(25, match->dest.prefix);
+  TEST_ASSERT_EQUAL_STRING("longest", match->dev);
+
+  table_destroy(reverse);
+  table_destroy(table);
+}
+
+void test_table_capacity_overflow_guard(void)
+{
+  TEST_ASSERT_TRUE(lab_test_table_capacity_overflow());
 }
 
 int main(void) {
@@ -271,5 +380,7 @@ int main(void) {
   RUN_TEST(test_cidr_subnet);
   RUN_TEST(test_route_parse);
   RUN_TEST(test_forwarding_table);
+  RUN_TEST(test_forwarding_table_without_default);
+  RUN_TEST(test_table_capacity_overflow_guard);
   return UNITY_END();
 }
